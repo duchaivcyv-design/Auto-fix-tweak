@@ -1,4 +1,5 @@
 // Auto Fix Tweak — gộp toàn bộ shared/ + tweak/ + Tweak.xm vào một file.
+// Daemon (daemon/) không được gộp vào vì là process root riêng (LaunchDaemon, có main()).
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 #import <stdint.h>
@@ -1635,7 +1636,7 @@ void AFPrepareImageTable(void) {
         snprintf(gCrashMarkerPathC, sizeof(gCrashMarkerPathC), "%s", marker ? marker : "");
 
         uint32_t imageCount = _dyld_image_count();
-        AFImageRange *ranges = calloc(imageCount > 0 ? imageCount : 1, sizeof(AFImageRange));
+        AFImageRange *ranges = (AFImageRange *)calloc(imageCount > 0 ? imageCount : 1, sizeof(AFImageRange));
         if (!ranges) return;
 
         size_t used = 0;
@@ -1890,7 +1891,8 @@ void AFInstallCrashGuard(void) {
 
         for (size_t i = 0; i < kAFSignalCount; i++) {
             int signalNumber = kAFSignals[i];
-            struct sigaction action = {0};
+            struct sigaction action;
+            memset(&action, 0, sizeof(action));
             action.sa_sigaction = AFSignalHandler;
             action.sa_flags = SA_SIGINFO | SA_ONSTACK;
             sigemptyset(&action.sa_mask);
