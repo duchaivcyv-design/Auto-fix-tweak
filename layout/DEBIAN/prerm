@@ -1,0 +1,35 @@
+#!/bin/sh
+# Auto Fix Tweak - chạy trước khi gỡ gói: trả lại mọi tweak đã tạm tắt
+# và hoàn tác các mục Exclude do Auto Fix thêm vào plist tweak.
+set -u
+
+LOG=/tmp/autofixtweak-prerm.log
+: > "$LOG" 2>/dev/null || true
+log() { echo "$*" >> "$LOG" 2>/dev/null || true; }
+
+JB=""
+if [ -d /var/jb ]; then JB="/var/jb"; fi
+
+DAEMON="$JB/usr/libexec/AutoFixDaemon"
+PLIST="$JB/Library/LaunchDaemons/com.minhhai.autofixtweakd.plist"
+
+case "${1:-}" in
+    remove|purge)
+        for LC in "$JB/usr/bin/launchctl" /bin/launchctl /usr/bin/launchctl; do
+            [ -x "$LC" ] || continue
+            "$LC" bootout system/com.minhhai.autofixtweakd >/dev/null 2>&1 || true
+            "$LC" unload -w "$PLIST" >/dev/null 2>&1 || true
+        done
+        if [ -x "$DAEMON" ]; then
+            "$DAEMON" --restore-all >>"$LOG" 2>&1 \
+                && log "restore-all ok" || log "restore-all failed"
+        else
+            log "daemon not found, skip restore-all"
+        fi
+        ;;
+    *)
+        log "skip restore-all (action=$1)"
+        ;;
+esac
+
+exit 0

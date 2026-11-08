@@ -1,0 +1,40 @@
+#!/bin/sh
+# Auto Fix Tweak - uninstall hook.
+# Always restore tweaks disabled by Auto Fix before the package disappears.
+set -u
+
+LOG=/tmp/autofixtweak-postrm.log
+: > "$LOG" 2>/dev/null || true
+log() { echo "$*" >> "$LOG" 2>/dev/null || true; }
+
+JB=""
+if [ -d /var/jb ]; then JB="/var/jb"; fi
+
+PLIST="$JB/Library/LaunchDaemons/com.minhhai.autofixtweakd.plist"
+
+for LC in "$JB/usr/bin/launchctl" /bin/launchctl /usr/bin/launchctl; do
+    [ -x "$LC" ] || continue
+    "$LC" bootout system/com.minhhai.autofixtweakd >/dev/null 2>&1 || true
+    "$LC" unload -w "$PLIST" >/dev/null 2>&1 || true
+done
+
+restore_dir() {
+    dir="$1"
+    [ -d "$dir" ] || return 0
+    for f in "$dir"/*.autofixdisabled; do
+        [ -e "$f" ] || continue
+        orig="${f%.autofixdisabled}"
+        if [ ! -e "$orig" ]; then
+            mv "$f" "$orig" 2>/dev/null && log "restored $orig"
+        fi
+    done
+}
+
+restore_dir "$JB/Library/MobileSubstrate/DynamicLibraries"
+restore_dir "$JB/usr/lib/TweakInject"
+restore_dir "/Library/MobileSubstrate/DynamicLibraries"
+restore_dir "/usr/lib/TweakInject"
+
+rm -rf /var/mobile/Library/AutoFixTweak 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Auto Fix Tweak - rootless/rootful install hook.
+# This script must never fail the package installation.
+set -u
+
+LOG=/tmp/autofixtweak-postinst.log
+: > "$LOG" 2>/dev/null || true
+log() { echo "$*" >> "$LOG" 2>/dev/null || true; }
+
+JB=""
+if [ -d /var/jb ]; then JB="/var/jb"; fi
+
+STATE=/var/mobile/Library/AutoFixTweak
+REQ="$STATE/requests"
+mkdir -p "$STATE" "$REQ" 2>/dev/null || true
+chown -R 501:501 "$STATE" 2>/dev/null || true
+chmod 755 "$STATE" 2>/dev/null || true
+chmod 777 "$REQ" 2>/dev/null || true
+
+DAEMON="$JB/usr/libexec/AutoFixDaemon"
+PLIST="$JB/Library/LaunchDaemons/com.minhhai.autofixtweakd.plist"
+
+if [ -f "$PLIST" ]; then
+    # launchd needs an absolute path inside the actual bootstrap root.
+    sed -i "s#<string>/usr/libexec/AutoFixDaemon</string>#<string>$DAEMON</string>#" "$PLIST" 2>/dev/null || true
+    chmod 644 "$PLIST" 2>/dev/null || true
+    chown 0:0 "$PLIST" 2>/dev/null || true
+fi
+
+chmod 755 "$DAEMON" 2>/dev/null || true
+log "daemon=$DAEMON plist=$PLIST"
+
+LOADED=0
+for LC in "$JB/usr/bin/launchctl" /bin/launchctl /usr/bin/launchctl; do
+    [ -x "$LC" ] || continue
+    "$LC" bootout system/com.minhhai.autofixtweakd >/dev/null 2>&1 || true
+    "$LC" unload -w "$PLIST" >/dev/null 2>&1 || true
+    if "$LC" bootstrap system "$PLIST" >/dev/null 2>&1; then
+        LOADED=1
+        log "bootstrap ok via $LC"
+        "$LC" kickstart -k system/com.minhhai.autofixtweakd >/dev/null 2>&1 || true
+        break
+    fi
+    if "$LC" load -w "$PLIST" >/dev/null 2>&1; then
+        LOADED=1
+        log "legacy load ok via $LC"
+        break
+    fi
+done
+
+if [ "$LOADED" -ne 1 ]; then
+    log "WARNING: could not start auto fix daemon automatically."
+    log "Run: launchctl bootstrap system $PLIST"
+fi
+
+exit 0
