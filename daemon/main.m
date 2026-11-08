@@ -58,6 +58,11 @@ static NSMutableDictionary *AFLoadDaemonState(void) {
         [state removeObjectForKey:@"cameraMarkerTime"];
         [state removeObjectForKey:@"cameraFailures"];
         [state removeObjectForKey:@"cameraLastFailure"];
+        [state removeObjectForKey:@"staticConflictScan"];
+        [state removeObjectForKey:@"staticConflicts"];
+        [state removeObjectForKey:@"conflictScan"];
+        [state removeObjectForKey:@"loadFailureScan"];
+        [state removeObjectForKey:@"loadFailureHandled"];
         state[@"version"] = AFVersion;
 
         /* Bản mới sửa camera thay vì tắt tweak: trả lại các tweak từng bị
@@ -554,6 +559,59 @@ static NSMutableArray<NSDictionary *> *AFNoticeItemsFromState(void) {
     return items;
 }
 
+/* Tweak bị dyld từ chối nạp (missing dependency, sai kiến trúc, chữ ký hỏng)
+   làm SpringBoard/app kẹt ở màn hình đen hoặc crash lúc khởi động. */
+static void AFLoadFailureGuard(NSDictionary *config) {
+    if (![config[@"loadFailureGuard"] boolValue]) return;
+
+    NSTimeInterval now = AFNow();
+    double lastScan = [gState[@"loadFailureScan"] doubleValue];
+    if (lastScan > 0 && now - lastScan < 60) return;
+    gState[@"loadFailureScan"] = @(now);
+
+    NSDictionary *saved = [gState[@"loadFailureHandled"] isKindOfClass:[NSDictionary class]]
+        ? gState[@"loadFailureHandled"] : @{};
+    NSMutableDictionary *handled = [NSMutableDictionary dictionary];
+    for (NSString *path in saved) {
+        if (now - [saved[path] doubleValue] <= 86400) handled[path] = saved[path];
+    }
+
+    NSUInteger parsed = 0;
+    for (NSDictionary *candidate in AFCrashReportCandidates(3600)) {
+        if (parsed >= 6) break;
+        NSString *path = candidate[@"path"];
+        if (![path isKindOfClass:[NSString class]]) continue;
+        if (handled[path]) continue;
+        if (lastScan > 0 && [candidate[@"time"] doubleValue] <= lastScan - 120) continue;
+        parsed++;
+
+        AFCrashInfo *info = AFParseCrashReport(path);
+        if (!info) continue;
+
+        NSString *base = AFLoadFailureTweakBase(path);
+        if (base.length == 0) continue;
+        handled[path] = @(now);
+
+        if (AFIsTweakQuarantined(base, gState)) continue;
+        AFTweakInfo *tweak = AFTweakInfoForBase(base);
+        if (!tweak || !tweak.enabled) continue;
+        if (info.time > 0 && tweak.installTime > info.time + 120) continue;
+
+        NSString *procName = info.procName.length ? info.procName : @"SpringBoard";
+        NSString *reason = [NSString stringWithFormat:
+            @"không nạp được vào %@ (lỗi dyld)", procName];
+        AFLogTo(AFDaemonLogPath(), @"Lỗi nạp tweak: %@ -> %@ (%@)",
+                base, reason, path.lastPathComponent ?: @"?");
+        AFPerformRecovery(config, @"loadfail", base,
+            [NSString stringWithFormat:
+             @"Tweak %@ không nạp được (Library not loaded/Symbol not found) nên Auto Fix đã tạm tắt để %@ khởi động bình thường.",
+             base, procName]);
+        break;
+    }
+
+    gState[@"loadFailureHandled"] = handled;
+}
+
 static void AFSafeModeGuard(NSDictionary *config) {
     if (![config[@"safeModeGuard"] boolValue]) return;
 
@@ -646,6 +704,7 @@ static void AFTick(void) {
                 if (appGuard & AFAppGuardResultNeedRespring) wantRespring = YES;
             }
             AFSafeModeGuard(config);
+            AFLoadFailureGuard(config);
 
             pid_t springBoard = AFSpringBoardPID();
             NSTimeInterval now = AFNow();
