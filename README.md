@@ -4,7 +4,7 @@
 
 **Chống treo respring và cô lập tweak gây lỗi cho jailbreak iOS**
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue?style=for-the-badge)](#-nhật-ký-thay-đổi)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue?style=for-the-badge)](#-nhật-ký-thay-đổi)
 [![Status](https://img.shields.io/badge/status-thử%20nghiệm-orange?style=for-the-badge)](#️-giới-hạn-cần-biết-quan-trọng)
 [![iOS](https://img.shields.io/badge/iOS-14.0%2B-black?style=for-the-badge&logo=apple)](#-yêu-cầu)
 [![Arch](https://img.shields.io/badge/arch-arm64%20%7C%20arm64e-lightgrey?style=for-the-badge)](#-yêu-cầu)
