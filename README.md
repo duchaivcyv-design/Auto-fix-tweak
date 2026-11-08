@@ -1,8 +1,8 @@
-GAYYYYYYYYYYYYYYYYYYYYYYYYY
+# Auto Fix Tweak
 
 - **Tên hiển thị:** Auto Fix Tweak
 - **Tác giả:** Nguyễn Minh Hải
-- **Phiên bản:** 0.3.0 (bản thử nghiệm)
+- **Phiên bản:** 0.4.0 (bản thử nghiệm)
 - **Mô tả:** Tweak giúp chống treo respring cho các tweak. Tự phát hiện vòng lặp respring,
   treo SpringBoard/watchdog timeout, crash app do tweak can thiệp, loại trừ tweak khỏi
   app bị lỗi hoặc tạm tắt tweak gây lỗi, tự thoát Safe Mode và cho bật lại từ thông báo.
@@ -81,6 +81,24 @@ Một tweak không thể sửa mã máy của tweak khác đang chạy. Vì vậ
   nút bật lại.
 - Phát hiện dựa trên suy đoán: crash report, marker, thời điểm cài đặt. Có thể tắt nhầm
   tweak lành. Vì vậy luôn có nút bật lại và chế độ an toàn.
+- **Phát hiện xung đột hook là ước lượng, không phải chẩn đoán tuyệt đối.** Daemon so
+  khớp *bề mặt selector* trích từ `__objc_methname` của từng dylib (giao nhau ≥3 selector
+  và tỉ lệ ≥15% trên cùng bundle đích); trùng tên selector không có nghĩa hai tweak chắc
+  chắn đè nhau, và ngược lại hai tweak đè nhau qua block/notification vẫn có thể không bị
+  phát hiện. Scanner runtime chỉ thấy các class thuộc danh sách tiền tố (SB, UI, CAM, AV,
+  SpringBoard…) và chỉ báo khi IMP đổi chủ sau khi Auto Fix đã quét — hook đăng ký trước
+  lúc quét hoặc nằm ngoài danh sách sẽ không hiện. Vì vậy chỉ dùng báo cáo
+  (`hookmap.txt`, `conflict_live.txt`) làm gợi ý; không có hành động tắt tweak nào chỉ dựa
+  vào xung đột tĩnh.
+- **Chống lỗi nạp dylib (dyld) chỉ xử lý được trường hợp có crash report.** Nếu tweak
+  thiếu thư viện, sai kiến trúc, sai chữ ký hoặc không tương thích iOS, Auto Fix đọc
+  report, xác định dylib và tạm tắt đúng tweak đó; nếu dyld treo trước khi report được
+  ghi, cơ chế này không can thiệp được. Nó cũng bỏ qua tweak được cài *sau* thời điểm
+  crash để tránh quy sai.
+- **Watchdog chỉ bắt được treo đồng bộ trên main thread.** Treo do deadlock ở thread phụ,
+  hoặc app bị jetsam/OOM, không phải "treo" theo nghĩa của watchdog; khi đó chỉ còn crash
+  report và chế độ an toàn. Mẫu stack nhanh (`hangFastSample`) có thể chỉ ra sai tweak nếu
+  ngăn xếp không còn frame của tweak gây treo.
 - Safe Mode chỉ được thoát khi có crash report/marker gần đây quy được cho tweak. Nếu
   không có bằng chứng, daemon giữ nguyên để tránh tắt nhầm.
 - Cần **daemon chạy bằng root** vì SpringBoard chạy quyền mobile, không thể đổi tên file
@@ -118,6 +136,8 @@ Dữ liệu và log (dùng chung cho cả hai scheme):
 ├── camera_last.txt       # marker lỗi camera (có thể nằm trong tmp của Camera)
 ├── camera_hooks.txt      # tweak nào đang hook method camera nào
 ├── camera_diag.txt       # báo cáo chẩn đoán lớp sửa camera
+├── conflict_live.txt     # cặp tweak đang tranh hook (do SpringBoard ghi)
+├── hookmap.txt           # tweak nào đang giữ bao nhiêu method
 ├── tweak.log
 ├── daemon.log
 ├── daemon.out / daemon.err
@@ -155,6 +175,13 @@ daemon). Các khoá:
 | `cameraDisableAfterFailures` | `3` | Số lần sửa thất bại trước khi tạm tắt tweak |
 | `cameraFailureWindow` | `1800` | Cửa sổ (giây) để đếm số lần sửa thất bại |
 | `cameraNeverDisable` | `false` | `true`: không bao giờ tạm tắt tweak vì camera |
+| `conflictGuard` | `true` | Phát hiện xung đột hook giữa các tweak |
+| `conflictScanSeconds` | `1` | Nhịp quét bảng method trong SpringBoard (giây) |
+| `crashBurstLimit` | `2` | Số crash của cùng app trong cửa sổ burst để tắt ngay tweak |
+| `crashBurstWindow` | `180` | Cửa sổ (giây) đếm crash liên tiếp của một app |
+| `watchdogCrashImmediate` | `true` | Tắt tweak ngay khi crash report là watchdog timeout |
+| `hangFastSample` | `true` | Báo treo ngay từ lần trượt ping đầu nếu stack nằm trong tweak |
+| `loadFailureGuard` | `true` | Tự tắt tweak bị dyld từ chối nạp (Library not loaded…) |
 
 ## Tự build
 
@@ -181,9 +208,9 @@ Lưu ý: file copy từ ổ Windows có thể mang quyền 0777; `dpkg-deb` sẽ
 ## Cài đặt
 
 - Thiết bị **rootless** (Dopamine, palera1n rootless…): cài
-  `com.minhhai.autofixtweak_0.3.0_iphoneos-arm64.deb`.
+  `com.minhhai.autofixtweak_0.4.0_iphoneos-arm64.deb`.
 - Thiết bị **rootful** (checkra1n, unc0ver…): cài
-  `com.minhhai.autofixtweak_0.3.0_iphoneos-arm.deb`.
+  `com.minhhai.autofixtweak_0.4.0_iphoneos-arm.deb`.
 
 Có thể cài bằng Sileo/Zebra/Filza hoặc:
 
@@ -209,6 +236,29 @@ Sau đó `postrm`:
 3. Xoá `/var/mobile/Library/AutoFixTweak`.
 
 ## Nhật ký thay đổi
+
+### 0.4.0
+- Thêm **bộ phát hiện xung đột tweak** chạy trong SpringBoard: quét IMP của method
+  thuộc các lớp hệ thống (`SB*`, `UI*`, `CAM*`, `AVCapture*`…), ghi nhận tweak nào
+  đang giữ method nào. Khi tweak B hook đè lên hook của tweak A, cặp xung đột được
+  ghi vào `conflict_live.txt` và `hookmap.txt`.
+- Daemon còn **quét tĩnh dylib**: đọc bảng `__objc_methname` của từng tweak, so sánh
+  bề mặt selector với các tweak cùng nhắm vào một tiến trình; cặp trùng nhiều selector
+  được coi là xung đột tiềm năng (tối đa 25 cặp, làm mới mỗi giờ).
+- Khi có sự cố camera, tweak **chiếm hook sau** được ưu tiên là nghi phạm; cảnh báo
+  xung đột được thêm vào thông báo xử lý.
+- Thêm **crash burst**: cùng một app crash `crashBurstLimit` lần (mặc định 2) trong
+  `crashBurstWindow` (mặc định 180 giây) thì tweak bị tạm tắt ngay, không chờ đủ
+  15 phút như trước.
+- Crash do **watchdog timeout** (`0x8badf00d`) được xử lý ngay từ lần đầu nếu crash
+  report chỉ ra tweak.
+- **Watchdog phát hiện sớm**: chỉ cần một lần trượt ping mà stack main thread đã nằm
+  trong tweak là Auto Fix báo daemon xử lý, không đợi lần trượt thứ hai.
+- Thêm **loadFailureGuard**: nếu crash report cho thấy tweak bị dyld từ chối nạp
+  (`Library not loaded`, `Symbol not found`, sai kiến trúc, chữ ký hỏng), daemon tự
+  tạm tắt tweak đó để SpringBoard/app khởi động lại bình thường.
+- Thêm cấu hình: `conflictGuard`, `conflictScanSeconds`, `crashBurstLimit`,
+  `crashBurstWindow`, `watchdogCrashImmediate`, `hangFastSample`, `loadFailureGuard`.
 
 ### 0.3.0
 - Thêm **lớp sửa camera** chạy trong tiến trình Camera/FaceTime: tự khôi phục camera
