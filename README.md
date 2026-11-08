@@ -1,4 +1,4 @@
-# Auto Fix Tweak
+# ÂY DO HẢI GAY
 
 - **Tên hiển thị:** Auto Fix Tweak
 - **Tác giả:** Nguyễn Minh Hải
