@@ -2408,6 +2408,11 @@ static void AFShowNoticeOnMain(NSDictionary *notice) {
 
 void AFShowNotice(NSDictionary *notice) {
     if (![notice isKindOfClass:[NSDictionary class]]) return;
+    // quietBlocks = true: không hiện thông báo khi tweak chặn lỗi; log vẫn được ghi đầy đủ.
+    if ([AFLoadConfig()[@"quietBlocks"] boolValue]) {
+        AFLog(@"Đã chặn lỗi (không hiện thông báo theo cấu hình quietBlocks)");
+        return;
+    }
     if ([NSThread isMainThread]) {
         AFShowNoticeOnMain(notice);
     } else {
@@ -3264,6 +3269,32 @@ static BOOL AFIsFaceTimeProcess(void) {
     return [[NSProcessInfo processInfo].processName isEqualToString:@"FaceTime"];
 }
 
+// ===================== Chặn áp lực RAM (memory pressure) =====================
+// Chỉ ghi nhận và báo trạng thái: không tự giải phóng bộ nhớ của tiến trình khác.
+static dispatch_source_t gMemorySource = nil;
+
+static void AFStartMemoryGuard(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_queue_t queue = dispatch_queue_create(
+            "com.minhhai.autofixtweak.memory", DISPATCH_QUEUE_SERIAL);
+        gMemorySource = dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+            DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL, queue);
+        if (!gMemorySource) return;
+        dispatch_source_set_event_handler(gMemorySource, ^{
+            unsigned long level = dispatch_source_get_data(gMemorySource);
+            BOOL critical = (level & DISPATCH_MEMORYPRESSURE_CRITICAL) != 0;
+            NSString *text = critical ? @"critical" : @"warn";
+            AFLog(@"Áp lực RAM: %@", text);
+            AFUpdateTweakState(^(NSMutableDictionary *state) {
+                state[@"memory"] = text;
+                state[@"memoryAt"] = @(AFNow());
+            });
+        });
+        dispatch_resume(gMemorySource);
+    });
+}
+
 %ctor {
     @autoreleasepool {
         if (AFCameraRepairProcess()) AFStartCameraRepair();
@@ -3282,6 +3313,7 @@ static BOOL AFIsFaceTimeProcess(void) {
         AFRecordBootNow();
         AFInstallCrashGuard();
         AFStartHangWatchdog();
+        AFStartMemoryGuard();
         AFStartHeartbeat();
         AFStartStatusPoller();
 
