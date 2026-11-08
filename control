@@ -2,8 +2,8 @@ Package: com.minhhai.autofixtweak
 Name: Auto Fix Tweak
 Version: 0.4.0
 Architecture: iphoneos-arm64
-Description: Tweak giúp chống treo respring cho các tweak (bản thử nghiệm). Tự phát hiện vòng lặp respring, treo SpringBoard/watchdog timeout, crash app do tweak can thiệp; loại trừ tweak khỏi app bị lỗi hoặc tạm tắt tweak gây lỗi, tự thoát Safe Mode và có thể bật lại từ thông báo.
-Maintainer: Nguyễn Minh Hải
-Author: Nguyễn Minh Hải
+Description: Chống treo SpringBoard và crash do tweak can thiệp (bản thử nghiệm). Chặn treo watchdog bằng ping main thread mỗi 1-5 giây, chỉ ra tay sau 2 lần timeout liên tiếp và không xếp chồng ping. Báo trạng thái starting, safe hoặc hung, ghi ngay khi thay đổi. Bắt 9 signal (SEGV, BUS, ABRT, ILL, FPE, TRAP, SYS, XCPU, XFSZ) cùng exception chưa xử lý để ghi marker crash. Nhận cảnh báo áp lực RAM (warn/critical) và ghi lại. Tuỳ chọn quietBlocks: tắt thông báo khi chặn lỗi, log vẫn ghi đầy đủ.
+Maintainer: Nguyễn Minh Hải, TaoJB
+Author: Nguyễn Minh Hải, TaoJB
 Section: Tweaks
 Depends: firmware (>= 14.0)
