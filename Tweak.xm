@@ -7,6 +7,7 @@
 #import "tweak/AFUI.h"
 #import "tweak/AFCameraGuard.h"
 #import "tweak/AFCameraRepair.h"
+#import "tweak/AFConflictGuard.h"
 
 static BOOL AFIsSpringBoardProcess(void) {
     NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
@@ -45,6 +46,7 @@ static BOOL AFIsFaceTimeProcess(void) {
         AFRecordBootNow();
         AFInstallCrashGuard();
         AFStartHangWatchdog();
+        AFStartConflictGuard();
         AFStartHeartbeat();
         AFStartStatusPoller();
 
