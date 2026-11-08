@@ -1598,7 +1598,8 @@ static NSUncaughtExceptionHandler *gPreviousExceptionHandler = NULL;
 static volatile sig_atomic_t gHandlingCrash = 0;
 static volatile sig_atomic_t gMarkerWritten = 0;
 
-static const int kAFSignals[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP };
+static const int kAFSignals[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP,
+                                  SIGSYS, SIGXCPU, SIGXFSZ };
 static const size_t kAFSignalCount = sizeof(kAFSignals) / sizeof(kAFSignals[0]);
 
 uint64_t AFStripCodePointer(uint64_t address) {
@@ -1895,7 +1896,8 @@ void AFInstallCrashGuard(void) {
             memset(&action, 0, sizeof(action));
             action.sa_sigaction = AFSignalHandler;
             action.sa_flags = SA_SIGINFO | SA_ONSTACK;
-            sigemptyset(&action.sa_mask);
+            // Chặn mọi signal khác trong lúc handler chạy để tránh lồng nhau.
+            sigfillset(&action.sa_mask);
             sigaction(signalNumber, &action, &gOldActions[signalNumber]);
         }
     });
