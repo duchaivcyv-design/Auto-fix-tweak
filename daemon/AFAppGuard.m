@@ -4,6 +4,7 @@
 #import "shared/AFCore.h"
 #import "shared/AFTweakScanner.h"
 #import "shared/AFCrashParser.h"
+#import "shared/AFConflict.h"
 
 #import <unistd.h>
 #import <pthread.h>
@@ -387,6 +388,97 @@ static void AFPublishAppNotice(NSMutableDictionary *state, NSString *message) {
     };
 }
 
+static BOOL AFConflictTick(NSDictionary *config,
+                           NSMutableDictionary *state,
+                           NSTimeInterval now) {
+    if (![config[@"conflictGuard"] boolValue]) return NO;
+
+    BOOL changed = NO;
+    double lastStatic = [state[@"staticConflictScan"] doubleValue];
+    if (lastStatic <= 0 || now - lastStatic >= 3600) {
+        state[@"staticConflictScan"] = @(now);
+        NSArray<NSDictionary *> *staticPairs = AFDetectTweakConflicts(AFScanTweaks());
+        state[@"staticConflicts"] = staticPairs ?: @[];
+        changed = YES;
+        if (staticPairs.count) {
+            AFLogTo(AFDaemonLogPath(),
+                    @"Xung đột tĩnh: %lu cặp tweak dùng chung nhiều selector",
+                    (unsigned long)staticPairs.count);
+        }
+    }
+
+    NSMutableArray<NSDictionary *> *pairs = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+
+    NSArray *staticPairs = [state[@"staticConflicts"] isKindOfClass:[NSArray class]]
+        ? state[@"staticConflicts"] : @[];
+    for (NSDictionary *pair in staticPairs) {
+        if (![pair isKindOfClass:[NSDictionary class]]) continue;
+        NSString *a = pair[@"a"];
+        NSString *b = pair[@"b"];
+        if (![a isKindOfClass:[NSString class]] ||
+            ![b isKindOfClass:[NSString class]]) continue;
+        if (AFIsTweakQuarantined(a, state) || AFIsTweakQuarantined(b, state)) continue;
+        NSString *key = AFConflictPairKey(a, b);
+        if ([seen containsObject:key]) continue;
+        [seen addObject:key];
+        [pairs addObject:pair];
+        if (pairs.count >= 20) break;
+    }
+
+    NSDictionary *live = AFReadLiveConflictReport();
+    if (live) {
+        double markerTime = [live[@"time"] doubleValue];
+        if (markerTime <= 0 || now - markerTime <= 300) {
+            for (NSDictionary *pair in live[@"pairs"]) {
+                if (![pair isKindOfClass:[NSDictionary class]]) continue;
+                NSString *a = pair[@"a"];
+                NSString *b = pair[@"b"];
+                if (![a isKindOfClass:[NSString class]] ||
+                    ![b isKindOfClass:[NSString class]]) continue;
+                if (AFIsTweakQuarantined(a, state) ||
+                    AFIsTweakQuarantined(b, state)) continue;
+                NSString *key = AFConflictPairKey(a, b);
+                if ([seen containsObject:key]) continue;
+                [seen addObject:key];
+                [pairs addObject:pair];
+                if (pairs.count >= 40) break;
+            }
+        }
+    }
+
+    id existing = state[@"conflicts"];
+    NSArray *existingPairs = [existing isKindOfClass:[NSDictionary class]]
+        ? existing[@"pairs"] : nil;
+    if (!existingPairs) existingPairs = @[];
+    if (![existingPairs isEqual:pairs]) {
+        if (pairs.count) {
+            state[@"conflicts"] = @{@"time": @(now), @"pairs": pairs};
+        } else {
+            [state removeObjectForKey:@"conflicts"];
+        }
+        changed = YES;
+    }
+
+    return changed;
+}
+
+static NSString *AFConflictSummary(NSDictionary *state, NSUInteger limit) {
+    NSArray<NSDictionary *> *pairs = AFConflictPairsFromState(state);
+    if (pairs.count == 0) return @"";
+    NSMutableArray<NSString *> *labels = [NSMutableArray array];
+    for (NSDictionary *pair in pairs) {
+        NSString *a = pair[@"a"];
+        NSString *b = pair[@"b"];
+        if (![a isKindOfClass:[NSString class]] ||
+            ![b isKindOfClass:[NSString class]]) continue;
+        [labels addObject:[NSString stringWithFormat:@"%@ ↔ %@", a, b]];
+        if (labels.count >= limit) break;
+    }
+    if (labels.count == 0) return @"";
+    return [labels componentsJoinedByString:@", "];
+}
+
 static NSDictionary *AFParseMarkerFile(NSString *path) {
     if (path.length == 0) return nil;
     NSString *text = [NSString stringWithContentsOfFile:path
@@ -615,9 +707,19 @@ static NSArray<NSString *> *AFCameraMarkerTick(NSDictionary *config,
         return @[];
     }
 
+    /* Nếu tweak đang giữ hook AVFoundation từng bị tweak khác chiếm hook,
+       ưu tiên tweak chiếm sau vì nó thường là bên gây lỗi. */
+    NSString *preferred = hookOwners.firstObject;
+    NSString *partner = AFConflictPartner(preferred, state);
+    if (partner.length) {
+        AFLogTo(AFDaemonLogPath(), @"Camera: ưu tiên %@ do xung đột hook với %@",
+                partner, preferred);
+        preferred = partner;
+    }
+
     NSArray<AFTweakInfo *> *ordered = AFOrderCameraCandidates(
         unique, marker[@"bundle"] ?: @"com.apple.camera",
-        marker[@"proc"] ?: @"Camera", hookOwners.firstObject);
+        marker[@"proc"] ?: @"Camera", preferred);
     NSArray<AFTweakInfo *> *untried = AFUntriedCameraTweaks(ordered, state, now);
     if (untried.count == 0) {
         AFLogTo(AFDaemonLogPath(), @"Camera: đã thử tất cả tweak đang nạp");
@@ -692,12 +794,21 @@ AFAppGuardResult AFAppGuardTick(NSDictionary *config, NSMutableDictionary *state
         }
     }
 
+    NSTimeInterval lastConflict = [state[@"conflictScan"] doubleValue];
+    if ([config[@"conflictGuard"] boolValue] &&
+        (lastConflict <= 0 || now - lastConflict >= 30)) {
+        state[@"conflictScan"] = @(now);
+        if (AFConflictTick(config, state, now)) changed = YES;
+    }
+
     NSTimeInterval lastScan = [state[@"appGuardScan"] doubleValue];
     if (appGuardEnabled && lastScan > 0 && now - lastScan < 30) {
         if (!changed) return AFAppGuardResultNone;
-        AFPublishAppNotice(state, [NSString stringWithFormat:
-            @"Auto Fix đã tạm tắt %@ vì làm camera trước không hoạt động. Mở lại Camera để kiểm tra; có thể bật lại từ thông báo.",
-            [cameraBases componentsJoinedByString:@", "]]);
+        if (cameraBases.count) {
+            AFPublishAppNotice(state, [NSString stringWithFormat:
+                @"Auto Fix đã tạm tắt %@ vì làm camera trước không hoạt động. Mở lại Camera để kiểm tra; có thể bật lại từ thông báo.",
+                [cameraBases componentsJoinedByString:@", "]]);
+        }
         return AFAppGuardResultChanged;
     }
 
@@ -823,6 +934,45 @@ AFAppGuardResult AFAppGuardTick(NSDictionary *config, NSMutableDictionary *state
             @"path": info.path ?: @""
         }];
 
+        NSTimeInterval burstWindow = [config[@"crashBurstWindow"] doubleValue];
+        if (burstWindow <= 0) burstWindow = 180;
+        NSUInteger burstLimit = [config[@"crashBurstLimit"] unsignedIntegerValue];
+        if (burstLimit < 2) burstLimit = 2;
+
+        NSUInteger burstCount = 0;
+        for (NSDictionary *entry in crashLog) {
+            NSString *entryBundle = entry[@"bundle"];
+            if (![entryBundle isKindOfClass:[NSString class]]) continue;
+            if ([entryBundle caseInsensitiveCompare:bundle] != NSOrderedSame) continue;
+            if (now - [entry[@"time"] doubleValue] <= burstWindow) burstCount++;
+        }
+
+        BOOL watchdogImmediate = info.watchdog &&
+            [config[@"watchdogCrashImmediate"] boolValue];
+        if ((watchdogImmediate || burstCount >= burstLimit) &&
+            !AFIsTweakQuarantined(tweak.base, state)) {
+            NSString *error = nil;
+            NSString *reason = watchdogImmediate
+                ? [NSString stringWithFormat:@"làm %@ bị watchdog timeout",
+                   info.procName.length ? info.procName : @"app"]
+                : [NSString stringWithFormat:@"gây %lu lần crash liên tiếp %@",
+                   (unsigned long)burstCount,
+                   info.procName.length ? info.procName : @"app"];
+            if (AFDisableTweak(tweak, reason, state, &error)) {
+                [quarantinedBases addObject:tweak.base];
+                changed = YES;
+                needRespring = YES;
+                AFLogTo(AFDaemonLogPath(),
+                        @"Tắt ngay %@: %@ (watchdog=%d, burst=%lu)",
+                        tweak.base, reason, info.watchdog ? 1 : 0,
+                        (unsigned long)burstCount);
+                continue;
+            } else if (error.length) {
+                AFLogTo(AFDaemonLogPath(), @"Không tắt được %@: %@",
+                        tweak.base, error);
+            }
+        }
+
         NSUInteger same = 0;
         for (NSDictionary *entry in crashLog) {
             double t = [entry[@"time"] doubleValue];
@@ -930,6 +1080,13 @@ AFAppGuardResult AFAppGuardTick(NSDictionary *config, NSMutableDictionary *state
                 @"Tweak %@ gây crash ở nhiều app nên đã bị tạm tắt toàn bộ.",
                 [quarantinedBases componentsJoinedByString:@", "]];
         }
+
+        NSString *conflictText = AFConflictSummary(state, 3);
+        if (conflictText.length) {
+            if (message.length) [message appendString:@" "];
+            [message appendFormat:@"Cảnh báo xung đột hook: %@.", conflictText];
+        }
+
         AFPublishAppNotice(state, message);
         return AFAppGuardResultChanged |
                (needRespring ? AFAppGuardResultNeedRespring : 0);
