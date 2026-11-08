@@ -1908,7 +1908,11 @@ static dispatch_source_t gHangTimer = nil;
 static mach_port_t gMainThreadPort = MACH_PORT_NULL;
 static NSTimeInterval gWatchdogStartTime = 0;
 static NSTimeInterval gLastHangRequest = 0;
-static BOOL gPingInFlight = NO;
+// Chỉ được đọc/ghi trên watchdog queue (serial), nên không cần khóa.
+static dispatch_semaphore_t gPendingPing = NULL;
+// Trạng thái watchdog: 0 = đang khởi động (chưa xác nhận), 1 = an toàn, 2 = treo.
+// Ghi bởi watchdog, đọc bởi heartbeat: volatile để đọc đúng giá trị mới.
+static volatile int gWatchdogState = 0;
 static NSUInteger gConsecutiveTimeouts = 0;
 
 static NSString *AFSampleMainThread(NSMutableArray<NSString *> *frames) {
@@ -1982,6 +1986,18 @@ static void AFWriteHangMarker(NSString *suspect, NSArray<NSString *> *frames, do
              encoding:NSUTF8StringEncoding error:NULL];
 }
 
+// Ghi trạng thái ngay khi thay đổi (safe <-> hung). Chỉ ghi file khi có đổi,
+// nên ping 1-5 giây không gây ghi đĩa liên tục.
+static void AFSetWatchdogStatus(int newState) {
+    if (gWatchdogState == newState) return;
+    gWatchdogState = newState;
+    NSString *text = newState == 1 ? @"safe" : (newState == 2 ? @"hung" : @"starting");
+    AFUpdateTweakState(^(NSMutableDictionary *state) {
+        state[@"status"] = text;
+        state[@"statusAt"] = @(AFNow());
+    });
+}
+
 static void AFWatchdogTick(void) {
     @autoreleasepool {
         NSDictionary *config = AFLoadConfig();
@@ -1992,24 +2008,27 @@ static void AFWatchdogTick(void) {
         if (grace <= 0) grace = 25.0;
         if (now - gWatchdogStartTime < grace) return;
 
-        if (gPingInFlight) return;
-        gPingInFlight = YES;
-
-        dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            dispatch_semaphore_signal(semaphore);
-        });
+        // Chỉ xếp một ping mới khi ping cũ đã được main thread trả lời.
+        if (!gPendingPing) {
+            dispatch_semaphore_t answer = dispatch_semaphore_create(0);
+            gPendingPing = answer;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                dispatch_semaphore_signal(answer);
+            });
+        }
 
         double timeout = [config[@"hangTimeout"] doubleValue];
         if (timeout <= 0) timeout = 12.0;
-        long waitResult = dispatch_semaphore_wait(semaphore,
+        long waitResult = dispatch_semaphore_wait(gPendingPing,
             dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)));
-        gPingInFlight = NO;
 
         if (waitResult == 0) {
+            gPendingPing = NULL;          // main đã trả lời, ping kế tiếp được xếp mới
             gConsecutiveTimeouts = 0;
+            AFSetWatchdogStatus(1);
             return;
         }
+        AFSetWatchdogStatus(2);           // ping vẫn chờ: giữ nguyên gPendingPing
 
         gConsecutiveTimeouts++;
         AFLog(@"Main thread không phản hồi ping (%.0fs), lần %lu",
@@ -2047,12 +2066,18 @@ void AFStartHangWatchdog(void) {
             gMainThreadPort = pthread_mach_thread_np(pthread_self());
         });
 
+        // Chu kỳ ping: cấu hình watchdogInterval, bị giới hạn trong khoảng 1-5 giây.
+        double pingInterval = [AFLoadConfig()[@"watchdogInterval"] doubleValue];
+        if (pingInterval < 1.0) pingInterval = 3.0;
+        if (pingInterval > 5.0) pingInterval = 5.0;
+        int64_t intervalNS = (int64_t)(pingInterval * NSEC_PER_SEC);
+
         dispatch_queue_t queue = dispatch_queue_create(
             "com.minhhai.autofixtweak.watchdog", DISPATCH_QUEUE_SERIAL);
         gHangTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
         dispatch_source_set_timer(gHangTimer,
-            dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC),
-            3 * NSEC_PER_SEC, NSEC_PER_SEC);
+            dispatch_time(DISPATCH_TIME_NOW, intervalNS),
+            (uint64_t)intervalNS, NSEC_PER_SEC / 2);
         dispatch_source_set_event_handler(gHangTimer, ^{
             AFWatchdogTick();
         });
@@ -2123,6 +2148,9 @@ void AFStartHeartbeat(void) {
         AFUpdateTweakState(^(NSMutableDictionary *state) {
             state[@"lastHeartbeat"] = @(AFNow());
             state[@"pid"] = @(getpid());
+            state[@"status"] = gWatchdogState == 1 ? @"safe"
+                             : (gWatchdogState == 2 ? @"hung" : @"starting");
+            state[@"statusAt"] = @(AFNow());
         });
 
         NSDictionary *config = AFLoadConfig();
@@ -2139,6 +2167,9 @@ void AFStartHeartbeat(void) {
             AFUpdateTweakState(^(NSMutableDictionary *state) {
                 state[@"lastHeartbeat"] = @(AFNow());
                 state[@"pid"] = @(getpid());
+                state[@"status"] = gWatchdogState == 1 ? @"safe"
+                             : (gWatchdogState == 2 ? @"hung" : @"starting");
+                state[@"statusAt"] = @(AFNow());
             });
         });
         dispatch_resume(gHeartbeatTimer);
