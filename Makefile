@@ -18,13 +18,15 @@ AutoFixTweak_FILES = Tweak.xm \
 	shared/AFCore.m \
 	shared/AFTweakScanner.m \
 	shared/AFCrashParser.m \
+	shared/AFConflict.m \
 	tweak/AFCrashGuard.m \
 	tweak/AFHangWatchdog.m \
 	tweak/AFBridge.m \
 	tweak/AFUI.m \
 	tweak/AFCameraGuard.m \
 	tweak/AFCameraRepair.m \
-	tweak/AFCameraRepairHooks.xm
+	tweak/AFCameraRepairHooks.xm \
+	tweak/AFConflictGuard.m
 AutoFixTweak_FRAMEWORKS = Foundation UIKit AVFoundation
 AutoFixTweak_CFLAGS = -fobjc-arc -I$(THEOS_PROJECT_DIR) -D_DARWIN_C_SOURCE -Wall -Wno-deprecated-declarations -g0
 
@@ -35,7 +37,8 @@ AutoFixDaemon_FILES = daemon/main.m \
 	daemon/AFAppGuard.m \
 	shared/AFCore.m \
 	shared/AFTweakScanner.m \
-	shared/AFCrashParser.m
+	shared/AFCrashParser.m \
+	shared/AFConflict.m
 AutoFixDaemon_FRAMEWORKS = Foundation
 AutoFixDaemon_CFLAGS = -fobjc-arc -I$(THEOS_PROJECT_DIR) -D_DARWIN_C_SOURCE -Wall -Wno-deprecated-declarations -g0
 AutoFixDaemon_INSTALL_PATH = /usr/libexec
