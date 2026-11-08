@@ -65,7 +65,7 @@ jobs:
           path: theos/sdks
           key: theos-sdks-16.5
 
-            - name: download sdks
+      - name: download sdks
         if: steps.cache-sdks.outputs.cache-hit != 'true'
         run: |
           rm -rf sdks-tmp
